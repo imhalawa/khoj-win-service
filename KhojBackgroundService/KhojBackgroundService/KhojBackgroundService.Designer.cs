@@ -33,7 +33,7 @@
             // 
             // KhojBackgroundService
             // 
-            this.ServiceName = "KhojAIAssistantService";
+            this.ServiceName = "KhojAIService";
             ((System.ComponentModel.ISupportInitialize)(this.eventLogger)).EndInit();
 
         }

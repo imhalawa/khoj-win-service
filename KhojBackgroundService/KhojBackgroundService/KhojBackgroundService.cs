@@ -1,11 +1,13 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.ServiceProcess;
-using System.Timers;
 using System.Runtime.InteropServices;
+using System.ServiceProcess;
+using System.Threading;
+using System.Timers;
 
 namespace KhojBackgroundService
 {
@@ -35,58 +37,78 @@ namespace KhojBackgroundService
     public partial class KhojBackgroundService : ServiceBase
     {
         private int eventId = 1;
-        //private Timer _timer;
-        Process _process;
+        private Process _process;
+        private ServiceStatus serviceStatus;
+
         public KhojBackgroundService()
         {
             InitializeComponent();
 
-            if (System.Diagnostics.EventLog.SourceExists("Khoj"))
+            if (!EventLog.SourceExists("Khoj"))
             {
-                System.Diagnostics.EventLog.CreateEventSource("Khoj", ServiceName);
+                EventLog.CreateEventSource("Khoj", ServiceName);
             }
+
             this.eventLogger.Source = "Khoj";
             this.eventLogger.Log = "KhojLog";
-
-            //this._timer = new Timer();
-            //_timer.Interval = 6000;
-            //_timer.Elapsed += new ElapsedEventHandler(this.OnTimer);
-            //_timer.Start();
-
         }
 
-        //private void OnTimer(object sender, ElapsedEventArgs e)
-        //{
-        //    eventLogger.WriteEntry($"{ServiceName} Polling ...", EventLogEntryType.Information, eventId++);
-        //}
+        private void OnTimer(object sender, ElapsedEventArgs e)
+        {
+            eventLogger.WriteEntry($"{ServiceName} Polling ...", EventLogEntryType.Information, eventId++);
+        }
 
         protected override void OnStart(string[] args)
         {
+            // Service Polling
+            var _timer = new System.Timers.Timer();
+            _timer.Interval = 6000;
+            _timer.Elapsed += this.OnTimer;
+            _timer.Start();
+
             // Update the service state to Start Pending.
-            ServiceStatus serviceStatus = new ServiceStatus();
+            serviceStatus = new ServiceStatus();
             serviceStatus.dwCurrentState = ServiceState.SERVICE_START_PENDING;
             serviceStatus.dwWaitHint = 100000;
             SetServiceStatus(this.ServiceHandle, ref serviceStatus);
 
             eventLogger.WriteEntry($"Starting {ServiceName}", EventLogEntryType.Information, eventId++);
+
+            Thread th = new Thread(new ParameterizedThreadStart(RunKhojServerCommand));
+            th.Start(new KhojThreadParameters() { Args = args });
+        }
+
+        private void RunKhojServerCommand(object parameters)
+        {
+            var args = parameters as KhojThreadParameters;
+
             try
             {
+                string commandPath = WhereSeach("Khoj");
+                string arguments = "--no-gui";
 
+                eventLogger.WriteEntry($"Command line {commandPath} is about to start", EventLogEntryType.Information, eventId++);
 
+                _process = new Process()
+                {
+                    StartInfo = new ProcessStartInfo(commandPath),
+                    EnableRaisingEvents = true,
+                };
+                _process.StartInfo.Arguments = arguments;
+                _process.StartInfo.UseShellExecute = true;
+                _process.StartInfo.CreateNoWindow = true;
 
-                string commandPath = WhereSeach("Khoj.exe");
-                string arguments = $"--no-gui {args}";
+                // Attach the event handler for the Exited event
+                _process.Exited += ProcessExited;
 
-                _process = new Process();
-                _process.StartInfo = new ProcessStartInfo(commandPath);
+                // Start the child process
                 _process.Start();
-                _process.Start();
-
-                eventLogger.WriteEntry($"{ServiceName} Started Successfully", EventLogEntryType.Information, eventId++);
 
                 // Update the service state to Running.
                 serviceStatus.dwCurrentState = ServiceState.SERVICE_RUNNING;
                 SetServiceStatus(this.ServiceHandle, ref serviceStatus);
+
+                eventLogger.WriteEntry($"{ServiceName} Started Successfully", EventLogEntryType.Information, eventId++);
             }
             catch (Exception ex)
             {
@@ -95,11 +117,28 @@ namespace KhojBackgroundService
             }
         }
 
+        private void ProcessExited(object sender, EventArgs e)
+        {
+            // This event handler is called when the child process has exited
+
+            // Perform any required actions or retrieve information after the process has exited
+
+            // Update the service state to Stopped.
+            serviceStatus.dwCurrentState = ServiceState.SERVICE_STOPPED;
+            SetServiceStatus(this.ServiceHandle, ref serviceStatus);
+        }
+
+
+        private void ChildProcess_Exited(object sender, EventArgs e)
+        {
+            eventLogger.WriteEntry($"{ServiceName} Child Process Exited", EventLogEntryType.Information, eventId++);
+            StopService();
+        }
+
         protected override void OnStop()
         {
             StopService();
         }
-
 
         private string WhereSeach(string fileName)
         {
@@ -112,7 +151,6 @@ namespace KhojBackgroundService
         private void StopService()
         {
             // Update the service state to Stop Pending.
-            ServiceStatus serviceStatus = new ServiceStatus();
             serviceStatus.dwCurrentState = ServiceState.SERVICE_STOP_PENDING;
             serviceStatus.dwWaitHint = 100000;
             SetServiceStatus(this.ServiceHandle, ref serviceStatus);
@@ -139,8 +177,13 @@ namespace KhojBackgroundService
             }
         }
 
-
         [DllImport("advapi32.dll", SetLastError = true)]
         private static extern bool SetServiceStatus(System.IntPtr handle, ref ServiceStatus serviceStatus);
+    }
+
+
+    internal class KhojThreadParameters
+    {
+        public string[] Args { get; set; }
     }
 }
